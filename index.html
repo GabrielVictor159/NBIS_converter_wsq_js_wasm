@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conversor WSQ WebAssembly</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; line-height: 1.6; }
+        .controles { background: #f4f4f4; padding: 15px; border-radius: 8px; }
+        button { cursor: pointer; padding: 8px 16px; margin-right: 5px; }
+        #status { color: blue; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Conversor WSQ no Navegador</h1>
+    
+    <div class="controles">
+        <p id="status">Carregando WebAssembly...</p>
+        <input type="file" id="arquivoEntrada" />
+        <br><br>
+        <button id="btnWsq" onclick="processarImagem(true, false)" disabled>Converter para WSQ</button>
+        <button id="btnJpg" onclick="processarImagem(false, false)" disabled>Converter WSQ para JPG</button>
+    </div>
+    
+    <br><br>
+    <a id="linkDownload" style="display:none; font-size: 1.2em; color: green;">Baixar Resultado</a>
+
+    <script src="conversor.js"></script>
+    
+    <script>
+        // Aguarda o Emscripten estar pronto
+        Module.onRuntimeInitialized = () => {
+            document.getElementById('status').innerText = "Cérebro WASM pronto!";
+            document.getElementById('status').style.color = "green";
+            document.getElementById('btnWsq').disabled = false;
+            document.getElementById('btnJpg').disabled = false;
+        };
+
+        async function converterImagem(jsUint8Array, tipoSaidaIsWsq, isPng) {
+    // 1. Tentar pegar o HEAP de diferentes lugares onde o Emscripten o esconde
+    const heap = Module.HEAPU8 || (Module.asm ? Module.asm.memory.buffer : null);
+
+    if (!heap) {
+        console.log("Estado do Module:", Module);
+        throw new Error("O motor WebAssembly está carregado, mas o acesso à memória (HEAPU8) está inacessível.");
+    }
+
+    const tamanhoEntrada = jsUint8Array.length;
+    
+    // 2. Aloca memória
+    const ptrEntrada = Module._malloc(tamanhoEntrada);
+    
+    // 3. Copia os dados para o HEAP usando a referência que acabamos de validar
+    // Usamos diretamente o Module.HEAPU8 se ele existir, ou criamos uma view
+    const view = Module.HEAPU8 ? Module.HEAPU8 : new Uint8Array(heap);
+    view.set(jsUint8Array, ptrEntrada);
+
+    const ptrTamanhoSaida = Module._malloc(4);
+
+    let ptrSaida;
+    try {
+        const nomeFuncao = tipoSaidaIsWsq ? 'converter_para_wsq' : 'converter_de_wsq';
+        
+        ptrSaida = Module.ccall(
+            nomeFuncao, 
+            'number', 
+            ['number', 'number', 'number', 'number'], 
+            [ptrEntrada, tamanhoEntrada, isPng ? 1 : 0, ptrTamanhoSaida]
+        );
+
+        if (ptrSaida === 0) {
+            throw new Error("O conversor NBIS falhou ao processar os dados.");
+        }
+
+        const tamanhoSaida = Module.getValue(ptrTamanhoSaida, 'i32');
+        
+        // 4. Para ler o resultado, usamos a mesma lógica de view
+        const resultadoView = new Uint8Array(Module.HEAPU8.buffer, ptrSaida, tamanhoSaida);
+        const copiaResultado = new Uint8Array(resultadoView);
+
+        Module.ccall('liberar_memoria', null, ['number'], [ptrSaida]);
+        return copiaResultado;
+
+    } finally {
+        Module._free(ptrEntrada);
+        Module._free(ptrTamanhoSaida);
+    }
+}
+
+        async function processarImagem(paraWsq, isPng) {
+            const fileInput = document.getElementById('arquivoEntrada');
+            if (fileInput.files.length === 0) {
+                alert("Por favor, selecione um arquivo primeiro.");
+                return;
+            }
+
+            const status = document.getElementById('status');
+            status.innerText = "Processando...";
+            status.style.color = "orange";
+
+            const file = fileInput.files[0];
+            const arrayBuffer = await file.arrayBuffer();
+            const uint8Array = new Uint8Array(arrayBuffer);
+
+            try {
+                const resultadoArray = await converterImagem(uint8Array, paraWsq, isPng);
+                
+                const blob = new Blob([resultadoArray], { type: "application/octet-stream" });
+                const url = URL.createObjectURL(blob);
+                
+                const link = document.getElementById('linkDownload');
+                link.href = url;
+                link.download = paraWsq ? "digital.wsq" : (isPng ? "digital.png" : "digital.jpg");
+                link.style.display = "block";
+                link.innerText = "✅ Clique aqui para baixar: " + link.download;
+                
+                status.innerText = "Concluído!";
+                status.style.color = "green";
+            } catch (err) {
+                console.error(err);
+                alert("Erro: " + err.message);
+                status.innerText = "Erro na conversão.";
+                status.style.color = "red";
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+python3 /home/projects/emsdk/upstream/emscripten/emcc.py conversor_wasm.c \
+    -o nbis_wsq.js \
+    -O3 \
+    -s WASM=1 \
+    -s ALLOW_MEMORY_GROWTH=1 \
+    -s USE_LIBJPEG=1 \
+    -s USE_LIBPNG=1 \
+    -s USE_ZLIB=1 \
+    --no-entry \
+    -s EXPORT_ES6=1 \
+    -s MODULARIZE=1 \
+    -s EXPORT_NAME='createNbisModule' \
+    -s EXPORTED_RUNTIME_METHODS='["ccall", "cwrap", "getValue", "writeArrayToMemory"]' \
+    -s EXPORTED_FUNCTIONS='["_malloc", "_free", "_converter_para_wsq", "_converter_de_wsq", "_liberar_memoria"]' \
+    -I./build_wasm/include \
+    -L./build_wasm/lib \
+    -lwsq -ljpegb -ljpegl -limage -lihead -lioutil -lfet -lutil -lm

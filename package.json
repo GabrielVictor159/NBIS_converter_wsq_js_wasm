@@ -1,0 +1,11 @@
+{
+  "name": "nbis-wsq-wasm-gabriel",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "nbis_wsq.js",
+    "nbis_wsq.wasm"
+  ]
+}
