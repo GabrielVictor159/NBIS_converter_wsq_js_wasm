@@ -1,54 +1,65 @@
+/**
+ * index.js - Wrapper compatível com Vue 2 / Webpack 4
+ */
 import createNbisModule from './nbis_wsq.js';
 
 class NbisConverter {
     constructor() {
         this.module = null;
-        this.inicializado = false;
+        this.isInitialized = false;
     }
 
     /**
-     * Inicializa o módulo WebAssembly.
-     * @param {string} wasmPath Caminho para o arquivo .wasm (geralmente na pasta public do Vue)
+     * Inicializa o módulo WASM.
+     * @param {string} wasmPath Caminho acessível via URL (ex: '/nbis_wsq.wasm')
      */
     async init(wasmPath = '/nbis_wsq.wasm') {
-        if (this.inicializado) return;
+        if (this.isInitialized) return this.module;
 
-        try {
-            this.module = await createNbisModule({
-                locateFile: (path) => {
+        const self = this;
+        return new Promise((resolve, reject) => {
+            // No modo MODULARIZE, createNbisModule retorna uma Promise
+            createNbisModule({
+                locateFile: function(path) {
                     if (path.endsWith('.wasm')) return wasmPath;
                     return path;
                 }
+            }).then((instance) => {
+                self.module = instance;
+                self.isInitialized = true;
+                console.log("NBIS WASM: Pronto para uso.");
+                resolve(instance);
+            }).catch((err) => {
+                console.error("NBIS WASM: Erro na inicialização", err);
+                reject(err);
             });
-            this.inicializado = true;
-            console.log("NBIS WASM: Inicializado com sucesso.");
-        } catch (error) {
-            console.error("NBIS WASM: Falha ao carregar o módulo.", error);
-            throw error;
-        }
+        });
     }
 
     /**
-     * Converte imagens entre WSQ e JPG/PNG.
-     * @param {ArrayBuffer|Uint8Array} buffer Dados da imagem de entrada
-     * @param {boolean} toWsq True para converter PARA WSQ, False para converter DE WSQ
-     * @param {boolean} isPng True se a entrada/saída for PNG, False para JPG
+     * Executa a conversão de imagem.
      */
     async convert(buffer, toWsq = true, isPng = false) {
-        if (!this.inicializado || !this.module) {
-            throw new Error("NBIS WASM: O módulo não foi inicializado. Chame .init() primeiro.");
+        if (!this.isInitialized) {
+            throw new Error("O conversor NBIS não foi inicializado. Chame .init() primeiro.");
         }
 
+        // Garante que o buffer de entrada é um Uint8Array
         const uint8Array = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
         
+        // 1. Aloca memória no heap do WebAssembly para a entrada
         const inputPtr = this.module._malloc(uint8Array.length);
+        
+        // Escreve os dados para a memória alocada do C
         this.module.writeArrayToMemory(uint8Array, inputPtr);
-
+        
+        // 2. Aloca 4 bytes para guardar o tamanho da saída (ponteiro de inteiro)
         const sizePtr = this.module._malloc(4);
         
         try {
             const funcName = toWsq ? 'converter_para_wsq' : 'converter_de_wsq';
             
+            // 3. Executa a conversão chamando a função em C
             const outPtr = this.module.ccall(
                 funcName,
                 'number',
@@ -57,28 +68,30 @@ class NbisConverter {
             );
 
             if (outPtr === 0) {
-                throw new Error("NBIS WASM: Falha interna na conversão (o conversor retornou nulo).");
+                throw new Error("Falha interna na conversão WASM (Motor C abortou).");
             }
 
+            // 4. Lê o tamanho do arquivo gerado
             const outSize = this.module.getValue(sizePtr, 'i32');
             
-            const resultView = new Uint8Array(this.module.HEAPU8.buffer, outPtr, outSize);
-            const finalData = new Uint8Array(resultView);
+            // 5. Pega os bytes da memória do WebAssembly para o JavaScript
+            const result = new Uint8Array(this.module.HEAPU8.buffer, outPtr, outSize);
+            
+            // Cria uma cópia independente (pois o free logo abaixo vai destruir o original)
+            const finalData = new Uint8Array(result); 
 
+            // 6. Limpa a memória do buffer de saída que foi alocada DENTRO do C
             this.module.ccall('liberar_memoria', null, ['number'], [outPtr]);
 
             return finalData;
 
-        } catch (err) {
-            console.error("NBIS WASM: Erro durante a execução.", err);
-            throw err;
         } finally {
-            // Sempre libera os ponteiros de entrada para evitar Memory Leaks
-            if (inputPtr) this.module._free(inputPtr);
-            if (sizePtr) this.module._free(sizePtr);
+            // 7. Sempre libera os buffers de entrada que alocamos aqui no JavaScript
+            this.module._free(inputPtr);
+            this.module._free(sizePtr);
         }
     }
 }
 
-const instance = new NbisConverter();
-export default instance;
+// Exporta a instância para ser usada como Singleton em todo o Vue
+export default new NbisConverter();
